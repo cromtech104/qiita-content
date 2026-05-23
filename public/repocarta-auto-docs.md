@@ -2,13 +2,13 @@
 title: GitHubリポジトリのドキュメントをAIで自動生成・自動更新する方法
 tags:
   - GitHub
-  - 個人開発
-  - AI
   - ドキュメント
+  - AI
+  - 個人開発
   - 生成AI
 private: false
-updated_at: ''
-id: null
+updated_at: '2026-05-24T02:02:00+09:00'
+id: ed37bdf97d11f496a69a
 organization_url_name: null
 slide: false
 ignorePublish: false
