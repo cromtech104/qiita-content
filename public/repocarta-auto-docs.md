@@ -2,12 +2,12 @@
 title: GitHubリポジトリから仕様書・設計書をAIで自動生成する方法
 tags:
   - GitHub
-  - GitHubApp
   - AWS
   - ドキュメント
+  - GithubApp
   - 生成AI
 private: false
-updated_at: '2026-05-24T02:02:00+09:00'
+updated_at: '2026-05-24T15:18:24+09:00'
 id: ed37bdf97d11f496a69a
 organization_url_name: null
 slide: false
