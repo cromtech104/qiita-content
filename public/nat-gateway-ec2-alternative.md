@@ -2,13 +2,13 @@
 title: NAT GatewayをEC2で代替してAWSのコストを月$32削減する方法【Terraform完全版】
 tags:
   - AWS
+  - vpc
+  - lambda
   - Terraform
-  - Lambda
-  - VPC
   - 個人開発
 private: false
-updated_at: ''
-id: null
+updated_at: '2026-06-04T00:16:57+09:00'
+id: 180ebf32a77587c8759f
 organization_url_name: null
 slide: false
 ignorePublish: false
