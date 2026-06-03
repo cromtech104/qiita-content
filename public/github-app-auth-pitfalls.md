@@ -1,14 +1,14 @@
 ---
 title: GitHub Appの認証、思ったより罠が多かった
 tags:
-  - GitHubApp
-  - GitHub
   - Python
+  - GitHub
   - 認証
   - 個人開発
+  - GithubApp
 private: false
-updated_at: ''
-id: null
+updated_at: '2026-06-04T00:06:17+09:00'
+id: c2323f3a3175f59dffd3
 organization_url_name: null
 slide: false
 ignorePublish: false
