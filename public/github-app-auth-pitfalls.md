@@ -11,7 +11,7 @@ updated_at: '2026-06-04T00:06:17+09:00'
 id: c2323f3a3175f59dffd3
 organization_url_name: null
 slide: false
-ignorePublish: false
+ignorePublish: true
 ---
 
 GitHub Appを使ってリポジトリにpushする機能を実装した。OAuthと似たようなものだろうと思っていたが、全然違った。ドキュメントが分散していて全体像を掴むまでに時間がかかったので、詰まったところを残しておく。
