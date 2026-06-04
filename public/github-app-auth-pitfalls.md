@@ -7,7 +7,7 @@ tags:
   - 個人開発
   - GithubApp
 private: false
-updated_at: '2026-06-04T01:07:52+09:00'
+updated_at: '2026-06-04T16:44:58+09:00'
 id: c2323f3a3175f59dffd3
 organization_url_name: null
 slide: false
