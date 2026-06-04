@@ -114,15 +114,16 @@ async def github_webhook(
 ):
     payload = await request.body()
 
-    # 署名検証を先にやる
+    # 署名検証を先にやる（pingも署名付きで届く）
     secret = get_secret("github_app_webhook_secret")
     if not verify_signature(payload, x_hub_signature_256, secret):
         raise HTTPException(status_code=401)
 
-    body = json.loads(payload)
-
+    # pingは疎通確認なので署名検証後すぐ返す（bodyのパースも不要）
     if x_github_event == "ping":
-        return {"status": "ok"}        # App登録直後の疎通確認、即返す
+        return {"status": "ok"}
+
+    body = json.loads(payload)
 
     if x_github_event == "installation":
         handle_installation(body)
@@ -136,7 +137,7 @@ async def github_webhook(
     return {"message": "ok"}
 ```
 
-`ping`イベントはApp設定を保存したときにGitHubから飛んでくる疎通確認で、これを即座に200で返さないとApp登録が完了しない。署名検証をしてから返すようにしていたら、秘密鍵の設定ミスで署名検証が失敗してApp登録できないという状況にハマった。`ping`だけは先に返す。
+`ping`イベントはApp設定を保存したときにGitHubから飛んでくる疎通確認で、これを200で返さないとApp登録が完了しない。pingも署名付きで届くので署名検証は通すべきで、検証してから返す。私は最初、秘密鍵の登録フォーマットをミスしていて署名検証に失敗し、App登録できずにハマったが、原因はpingの扱いではなく秘密鍵の設定だった。
 
 ## Webhook署名検証は`hmac.compare_digest`を使う
 
@@ -172,7 +173,7 @@ if x_github_event == "push":
     # ここからドキュメント生成処理
 ```
 
-GitHub ActionsのコミットはpusherがL`github-actions[bot]`になる。自前のbotアカウントでpushするなら、そのアカウント名で判定する。
+GitHub Actionsのコミットはpusherが`github-actions[bot]`になる。自前のbotアカウントでpushするなら、そのアカウント名で判定する。
 
 ---
 
