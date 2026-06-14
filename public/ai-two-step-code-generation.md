@@ -14,35 +14,24 @@ slide: false
 ignorePublish: false
 ---
 
-チケット管理システムのissueを受け取り、対象リポジトリを読んでGitHubにDraft PRを自動作成するシステムを作った。
+チケット管理システムのissueを受け取って、対象リポジトリを調査し、GitHubにDraft PRを自動作成するシステムを作っている。
 
-「AIにコードを書かせる」部分で詰まった点が2つある。**ファイル全部を渡すとコストとコンテキストが爆発すること**、**AIのJSONレスポンスが仕様どおりに来ない**ことだ。この記事ではその設計と実装を書く。
+AIにコードを書かせる部分の設計でわかったことを残しておく。
 
-## やること
+## ファイルを全部渡すとコストが爆発する
 
-```
-チケット（バグ・要望）
-  → Step 1: ファイルツリー → 関連ファイルを特定
-  → Step 2: 関連ファイルの内容 → 修正コードを生成
-  → GitHub Draft PR作成
-```
+最初の実装は「チケットとファイルを全部渡してコードを生成させる」だった。動くけど、ファイルが増えると入力トークンが爆発する。関係ないファイルを大量に渡しても精度は上がらなかった。
 
-## なぜ2ステップか
+なので2ステップに分けた。
 
-最初は「チケットとリポジトリのファイルを全部渡してコードを生成させる」という実装にした。動いたが、問題が2つあった。
+**Step 1**: ファイルの「中身」は渡さず「パス一覧」だけを渡して、チケットに関係しそうなファイルを絞り込む。
 
-**コストが高い**: ファイル数が増えると入力トークンが爆発する。関係のないファイルを大量に渡しても精度は上がらない。
+**Step 2**: 絞り込んだファイルの中身だけを渡して、修正コードを生成する。
 
-**コンテキスト制限**: 大きなリポジトリでは全ファイルを連結するとコンテキスト制限を超える。
-
-解決策として2ステップに分けた。Step 1ではファイルの「中身」は渡さず「ファイルパスの一覧」だけを渡す。それだけでも「このチケットに関係しそうなファイル」はかなり絞れる。
-
-## Step 1: ファイルツリーから関連ファイルを特定
+ファイルパスを見るだけでも「このバグは`routes/auth.py`と`models/user.py`あたりだろう」という絞り込みはかなりできる。
 
 ```python
-async def identify_relevant_files(
-    self, issue: dict, file_tree: list[str]
-) -> list[str]:
+async def identify_relevant_files(self, issue: dict, file_tree: list[str]) -> list[str]:
     tree_text = "\n".join(file_tree)
     prompt = f"""## チケット
 
@@ -73,94 +62,43 @@ Rules:
     return self._parse_file_list(response.content[0].text)
 ```
 
-ポイントはプロンプトに「**チケットに記載された内容に直接関係するファイルのみ選ぶ**」と明示していること。これがないと「関係するかもしれない」ファイルを大量に返してくる。
+「チケットに直接関係するファイルのみ」と明示しているのがポイント。これがないと「関係するかも」なファイルをどんどん追加してくる。`max_tokens=512`に絞っているのも、パスのリストだけ返せばいいので長い回答を許さないため。
 
-max_tokensを512に絞っているのも意図的。ファイルパスのリストだけ返せばいいので、長い回答を許さない。
+## 修正コードをcommit_groups形式で返させる
 
-## Step 2: 関連ファイルの内容から修正コードを生成
+Step 2ではファイル内容を渡して修正コードを生成する。このとき差分を`commit_groups`という形式で返させている。
 
-Step 1で絞り込んだファイルだけを読み込んで、修正コードを生成する。
-
-```python
-async def generate_fix(
-    self, issue: dict, file_contents: dict[str, str]
-) -> FixResult:
-    files_text = "\n\n".join(
-        f"### {path}\n```\n{content}\n```"
-        for path, content in file_contents.items()
-    )
-    prompt = f"""## チケット
-
-Summary: {issue.get('summary')}
-Description: {issue.get('description', '(no description)')}
-
-## 関連ファイルの内容
-
-{files_text}
-
----
-
-Respond in JSON only:
-{{
+```json
+{
   "is_fixable": true,
-  "reasoning": "実装方針の説明",
+  "reasoning": "〇〇が原因のため△△を修正する",
   "commit_groups": [
-    {{
-      "message": "feat: add order history feature",
+    {
+      "message": "feat: 注文履歴機能を追加",
       "files": [
-        {{
-          "path": "order_history.py",
-          "content": "変更後の完全なファイル内容"
-        }}
+        { "path": "order_history.py", "content": "変更後の完全なファイル内容" }
       ]
-    }}
+    },
+    {
+      "message": "test: 注文履歴のテストを追加",
+      "files": [
+        { "path": "test_order_history.py", "content": "テストコードの内容" }
+      ]
+    }
   ],
-  "pr_description": "## 概要\\n..."
-}}
-"""
-    response = await client.messages.create(
-        model=MODEL, max_tokens=8096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return self._parse_fix_result(response.content[0].text)
+  "pr_description": "## 概要\n..."
+}
 ```
 
-### commit_groupsで論理的にコミットを分割させる
+1つのcommit_groupが1コミットになる。機能とテストを別コミットにしたり、独立した機能は分けたりとPRのコミット履歴が読みやすくなる。
 
-生成する差分を`commit_groups`という形式にしている。1つのcommit_groupが1コミットに対応する。
+`is_fixable: false`も返せるようにしているのが重要で、チケットの記述が曖昧すぎて実装方針が判断できない場合にはPR作成をスキップして、チケットに「情報不足のためスキップしました」とコメントする。無理に生成させると変な差分が作られるだけなので、スキップの判断も明示的に返させている。
 
-これにより：
-- 機能追加とテストを別コミットにできる
-- 独立した機能は別コミットに分けられる
-- PRのコミット履歴が読みやすくなる
+## AIのJSONレスポンスが仕様どおりに来ない
 
-### is_fixable: やらない判断を明示する
+「JSON only」と指示してもコードフェンス（` ```json ... ``` `）で包んで返してくることがある。キー名のスタイルも`is_fixable`だったり`isFixable`だったり揺れる。
 
-`is_fixable: false`を返せる設計にしている。
-
-チケットの記述が曖昧すぎて何を実装すべきか判断できない場合、AIは無理にコードを生成しなくていい。`is_fixable: false`と`reasoning`（スキップ理由）だけ返す。
-
-呼び出し元はこれを見てPR作成をスキップし、チケット管理システムに「情報不足のためスキップしました」とコメントを残す。
-
-## JSONレスポンスのパース
-
-ここが一番詰まった。
-
-AIは「JSON only」と指示してもコードフェンス（` ```json ... ``` `）で包んで返すことがある。また、キー名が仕様と微妙に違う（`is_fixable`ではなく`isFixable`など）ことがある。
-
-### コードフェンスを除去する
-
-```python
-def _strip_code_fence(self, text: str) -> str:
-    match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-    return text
-```
-
-### 先頭の`{`からJSONをスキャンする
-
-レスポンスの先頭に余分な文字列がついていることがある。先頭の`{`を探してそこからパースを試みる。
+まずコードフェンスを除去して、先頭の`{`からJSONを探す。
 
 ```python
 def _extract_json_object(self, text: str) -> dict | None:
@@ -176,16 +114,21 @@ def _extract_json_object(self, text: str) -> dict | None:
         if isinstance(data, dict):
             return data
     return None
+
+def _strip_code_fence(self, text: str) -> str:
+    match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return text
 ```
 
-`json.loads()`ではなく`raw_decode()`を使うのは、JSONの後ろに余分な文字列があっても途中までパースできるため。
+`json.loads()`ではなく`raw_decode()`を使っているのは、JSONの後ろに余分な文字があっても途中までパースできるから。
 
-### 複数のキー名候補を受け付ける
+キー名は複数の候補を試す。
 
 ```python
 IS_FIXABLE_KEYS     = ("is_fixable", "isFixable", "fixable")
 REASONING_KEYS      = ("reasoning", "reason", "summary")
-PR_DESCRIPTION_KEYS = ("pr_description", "prDescription")
 COMMIT_GROUP_KEYS   = ("commit_groups", "commitGroups")
 
 def _get_first_present(self, data: dict, keys: tuple, default=None):
@@ -195,24 +138,11 @@ def _get_first_present(self, data: dict, keys: tuple, default=None):
     return default
 ```
 
-### booleanの文字列対応
+`is_fixable`に`"true"`（文字列）が来ることもあるのでboolへの変換も入れている。
 
-```python
-def _coerce_bool(self, value) -> bool | object:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "yes", "1"}:
-            return True
-        if normalized in {"false", "no", "0"}:
-            return False
-    return value
-```
+## ファイルパスはそのまま使わない
 
-## ファイルパスの検証
-
-AIが生成したファイルパスをそのままディスクに書くのは危険。パストラバーサル（`../../etc/passwd`など）を防ぐ検証を入れる。
+AIが返すファイルパスをそのままディスクに書くのは危ない。チケットにユーザーが書いた内容がそのままAIに渡っているので、パストラバーサル（`../../etc/passwd`など）が含まれている可能性がある。
 
 ```python
 def _normalize_path(self, path) -> str | None:
@@ -222,32 +152,20 @@ def _normalize_path(self, path) -> str | None:
     normalized_path = path.strip().replace("\\", "/")
     if not normalized_path:
         return None
-    # 絶対パス・ホームディレクトリを拒否
     if normalized_path.startswith(("/", "~")):
         return None
-    # URI scheme を拒否 (file://, http:// など)
-    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", normalized_path):
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", normalized_path):  # URI scheme
         return None
 
     parts = [part for part in normalized_path.split("/") if part]
-    # .. によるディレクトリ遡上を拒否
     if not parts or any(part == ".." for part in parts):
         return None
 
     return "/".join(parts)
 ```
 
-AIが生成するパスをそのまま信頼しないのは、入力がユーザーのチケット（外部入力）を含んでいるから。チケットに`../../../../etc/passwd`のようなパスが書かれていた場合のことを考えると、検証は必須。
+絶対パス・ホームディレクトリ・URIスキーム・`..`を全部弾く。入力がユーザー由来のものを含む場合はAIが生成した値でも信頼しない。
 
-## まとめ
+---
 
-| 問題 | 対処 |
-|------|------|
-| 全ファイルを渡すとコスト爆発 | 2ステップ（ツリー→絞り込み→生成） |
-| AIがJSONにコードフェンスをつける | 正規表現で除去 |
-| キー名がスタイルによって揺れる | 複数の候補キーをフォールバックで試す |
-| JSONの前後に余分な文字列がある | `raw_decode`で先頭`{`からスキャン |
-| AIが書いたパスをそのまま使うと危険 | パストラバーサル検証を必ず入れる |
-| 対応できないチケットに無理に対応させる | `is_fixable: false`で明示的にスキップ |
-
-これらの設計をベースに、チケット管理システムのissueを起点にGitHub Draft PRを自動作成するサービスを作っている。
+2ステップの分割とJSONパースの堅牢化が実装の核になった。特にJSON周りは「仕様通りに来るはず」という前提で作るとすぐ壊れるので、最初から複数のキー候補とコードフェンス除去を入れておくのがおすすめ。
