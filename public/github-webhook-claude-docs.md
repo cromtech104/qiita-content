@@ -14,7 +14,7 @@ slide: false
 ignorePublish: false
 ---
 
-GitHubのpushをトリガーに、リポジトリのドキュメントをClaudeで自動更新するSaaSを個人で作っている。
+GitHubのpushをトリガーに、リポジトリのドキュメントをClaudeで自動更新するSaaS（[RepoCarta](https://repocarta.jp/)）を個人で作っている。
 
 「WebhookでpushのイベントをLambdaで受け取って、Claudeに渡せばいいだけ」と最初は思っていた。実際に作ると、署名検証、大きいリポジトリへの対応、Webhookの重複処理、Lambdaのタイムアウト回避など、ちゃんと考えないといけないところがいくつかあった。詰まったところをまとめておく。
 
