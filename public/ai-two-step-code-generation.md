@@ -30,6 +30,8 @@ ignorePublish: false
 
 `routes/auth.py`や`models/user.py`などファイルパスを見るだけで「このバグはここあたりだろう」という判断はかなりできる。
 
+同じ2ステップをドキュメント自動生成に応用した設計（Webhookの冪等性・Lambda分離含む）は[別の記事](https://qiita.com/items/716e37636e720a47a4ff)で書いています。
+
 ```python
 async def identify_relevant_files(self, issue: dict, file_tree: list[str]) -> list[str]:
     tree_text = "\n".join(file_tree)
