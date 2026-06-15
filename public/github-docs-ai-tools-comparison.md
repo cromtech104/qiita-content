@@ -2,13 +2,13 @@
 title: GitHubドキュメントをAI自動生成するツール選び——DeepWiki・readme-ai・Copilotとの比較
 tags:
   - GitHub
-  - 生成AI
   - ドキュメント
   - 個人開発
+  - 生成AI
   - Claude
 private: false
-updated_at: '2026-06-15T17:00:00+09:00'
-id: null
+updated_at: '2026-06-15T22:49:22+09:00'
+id: 595c378611576a365442
 organization_url_name: null
 slide: false
 ignorePublish: false
