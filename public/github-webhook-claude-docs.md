@@ -1,5 +1,5 @@
 ---
-title: GitHubのpushをトリガーにClaudeでドキュメントを自動更新する仕組みを個人で作った話
+title: GitHub Webhook + LambdaでLLM処理を動かすときに考えたこと
 tags:
   - AWS
   - lambda
@@ -7,20 +7,18 @@ tags:
   - 生成AI
   - Claude
 private: false
-updated_at: '2026-06-15T00:40:31+09:00'
+updated_at: '2026-06-14T21:00:10+09:00'
 id: 716e37636e720a47a4ff
 organization_url_name: null
 slide: false
 ignorePublish: false
 ---
 
-GitHubのpushをトリガーに、リポジトリのドキュメントをClaudeで自動更新するSaaS（[RepoCarta](https://repocarta.jp/)）を個人で作っている。
+GitHub Webhookを受け取って、LLMに何か処理させて、結果をどこかに書き出す、というパターンのシステムを作った。コンセプト自体は単純で最初はすぐ動いた。プロダクションとして運用するにはいくつか考えないといけないことがあったので、実装した内容を残しておく。
 
-「WebhookでpushのイベントをLambdaで受け取って、Claudeに渡せばいいだけ」と最初は思っていた。実際に作ると、署名検証、大きいリポジトリへの対応、Webhookの重複処理、Lambdaのタイムアウト回避など、ちゃんと考えないといけないところがいくつかあった。詰まったところをまとめておく。
+## Webhook署名を検証しないと誰でもリクエストを投げ放題になる
 
-## Webhook署名の検証は最初にやる
-
-GitHubは`X-Hub-Signature-256`ヘッダーに署名を付けてWebhookを送ってくる。これを検証しないと、誰でも偽のpushイベントを送り込める。
+GitHubは`X-Hub-Signature-256`ヘッダーにHMAC-SHA256の署名を付けてWebhookを送ってくる。これを検証しないと、外部から偽のpushイベントを投げてLLM処理を無限に起動できてしまう。
 
 ```python
 import hashlib
@@ -33,28 +31,28 @@ def verify_github_signature(payload: bytes, signature: str, secret: str) -> bool
     return hmac.compare_digest(expected, signature)
 ```
 
-`==`で比較しないのはタイミング攻撃の対策で、`hmac.compare_digest`は常に一定時間で比較する。これはWebhookエンドポイントで最初にやること。署名が合わなければ即401を返す。
+`==`ではなく`hmac.compare_digest`で比較するのはタイミング攻撃への対策。Webhookエンドポイントに到達したら最初にここを通して、合わなければ即401を返す。
 
-## リポジトリが大きいとそのまま全部渡せない
+## リポジトリのファイルを全部LLMに渡せるのは小規模だけ
 
-最初は「全ファイルを読んでClaudeに渡せばいい」という実装にしていた。小さいリポジトリでは動く。ファイル数が増えると詰まる。
+最初は「全ファイルを読んでLLMに渡せばいい」という実装にしていた。ファイルが増えると3つの壁にぶつかる。
 
 - GitHubのAPIレート制限（1時間5000リクエスト）に引っかかる
-- 全ファイルを連結するとClaudeのコンテキストを超える
+- 全ファイルを連結するとコンテキストウィンドウを超える
 - Lambdaがタイムアウトする（最大15分）
 
-なのでファイル数で処理を2パターンに分けた。
+ファイル総量で処理を2パターンに分けた。
 
 ```python
 SINGLE_PASS_CHAR_LIMIT = 400_000  # これ以下なら1パスで処理
 CHUNK_SIZE = 30                   # 2パス処理時のファイル数/チャンク
 ```
 
-**小〜中規模（1パス）**: ファイル内容を全部連結してClaudeへ。シンプルで品質も高い。
+**小〜中規模（1パス）**: ファイル内容を全部連結してLLMへ渡す。シンプルで品質も高い。
 
 **大規模（2パス）**:
-- Pass 1（軽量モデル）: ファイルのパス一覧だけを渡して「このドキュメントに関係するファイルはどれ？」を聞く
-- Pass 2（高性能モデル）: 絞り込んだファイルの中身だけを渡してドキュメントを生成する
+- Pass 1: ファイルの「パス一覧だけ」を渡して「この処理に関係するファイルはどれ？」を聞く
+- Pass 2: 絞り込んだファイルの中身だけを渡して実際の処理をする
 
 ```python
 # Pass 1: ファイルツリー（パス一覧）だけ渡して絞り込む
@@ -69,16 +67,16 @@ JSON: {{"files": ["path/to/file.py", ...]}}
 """
 relevant_files = call_claude_light(prompt)
 
-# Pass 2: 絞り込んだファイルの中身でドキュメントを生成
+# Pass 2: 絞り込んだファイルの中身だけで処理
 source = read_files(relevant_files)
-doc = call_claude_heavy(source, doc_type="api_spec")
+result = call_claude_heavy(source, task="api_spec")
 ```
 
-ファイルパスを見るだけでもかなり絞れる（`routes/auth.py`とか`models/user.py`とか）。全部読ませるよりずっと安い。
+ファイルパスだけでも「このバグは`routes/auth.py`と`models/user.py`あたりだろう」くらいの絞り込みはできる。全部読ませるよりトークンコストが大幅に下がる。
 
-## PR mergeは差分だけ更新する
+## pushのたびに全量処理するとAPIコストが跳ね上がる
 
-pushのたびに全ドキュメントを再生成していると、APIのコストが跳ね上がる。PR mergeのときは変更ファイルが明確にわかるので、それを使う。
+PR mergeのときは`commits`の差分から変更ファイルが明確にわかる。それを使って変更のあったドキュメントだけ再生成するようにした。
 
 ```python
 REGEN_FILE_THRESHOLD = 10  # 変更ファイル数がこれ以上 → 全体再生成
@@ -92,11 +90,11 @@ else:
         regenerate_doc(repo, doc_type, hint_files=changed_files)
 ```
 
-日常の小さな変更はdiff更新、大きな変更は全体再生成という切り替え。これで通常のコスト感がかなり違う。
+日常的な小さな変更はdiff更新、大きなリファクタリングは全体再生成、という切り替え。通常のAPIコストが体感でかなり変わる。
 
-## 同じWebhookが2回来ることがある
+## GitHubのWebhookは同じイベントを複数回送ってくることがある
 
-GitHubのWebhookはネットワークエラーなどで再送されることがある。同じpushが2回来ても生成処理が2回走らないようにする必要があって、`X-GitHub-Delivery`（イベントごとのユニークID）をDBに記録して管理した。
+ネットワークエラーでGitHubがWebhookを再送することがある。同じpushイベントが2回来ても処理が2回走らないよう、`X-GitHub-Delivery`ヘッダー（イベントごとのユニークID）をDBに記録して冪等性を担保した。
 
 ```python
 delivery_id = request.headers.get("X-GitHub-Delivery")
@@ -113,24 +111,24 @@ except Exception as e:
     raise
 ```
 
-「処理中」のまま失敗したエントリが残ると次の処理が走れなくなるので、一定時間後に再処理可能にするタイムアウトも持たせている。
+「処理中」状態のまま失敗したエントリが残ると次の処理が走れなくなるので、一定時間後に再処理可能にするタイムアウトも設けた。
 
-## 受信と生成を分離する
+## LLM処理とWebhook受信を同じLambdaでやるとタイムアウトする
 
-ドキュメントが10種類あって、それぞれClaudeを呼ぶと数分かかることがある。LambdaはWebhookの受信もやっていて、同期処理にすると余裕でタイムアウトする。
+ドキュメントの種類が増えてくると、LLMの呼び出しが積み重なって数分かかることがある。Webhookを受け取るLambdaで同期処理すると余裕でタイムアウトする（Lambdaのタイムアウトはデフォルト3秒、最大15分だが、GitHubがWebhookのタイムアウトとみなす時間はもっと短い）。
 
-なのでWebhookを受け取るLambdaはSQSに積んで即202を返すだけにして、実際の生成処理は別Lambdaにした。
+Webhook受信LambdaはSQSにメッセージを積んで即202を返すだけにして、実際の処理は別のLambdaに分けた。
 
 ```
-Webhook Lambda（30秒でタイムアウト）
-  → SQS に積んで即 202 返却
+Webhook Lambda（数秒で即返却）
+  → SQS にキューイング → 即 202 返却
 
-Generator Lambda（15分まで）
+Generator Lambda（最大15分まで使える）
   → SQS からメッセージを取り出して処理
 ```
 
-GitHubから見ると即座にレスポンスが返ってくるし、生成処理がどれだけかかっても詰まらない。
+GitHubから見ると即座にレスポンスが返るし、処理側はタイムアウトを気にせず動ける。
 
 ---
 
-署名検証と冪等性だけは最初からやっておかないと後で直すのが面倒。コンテキスト設計はリポジトリの規模次第で全然変わってくるので、小さいリポジトリから始めて壊れたら考えるくらいでも良かった。
+署名検証と冪等性は最初からやっておかないと後で直すのが面倒。コンテキスト設計はリポジトリの規模が変わると大きく変わるので、最初は1パスで動かして、遅くなったら2パス化するくらいでよかった。
