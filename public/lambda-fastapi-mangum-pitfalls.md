@@ -1,14 +1,14 @@
 ---
 title: FastAPI(Mangum)をAWS Lambdaで本番運用して踏んだ落とし穴
 tags:
+  - Python
   - AWS
   - lambda
-  - FastAPI
-  - Python
   - 個人開発
+  - FastAPI
 private: false
-updated_at: ''
-id: null
+updated_at: '2026-06-28T14:28:41+09:00'
+id: 96864b934276c08d0421
 organization_url_name: null
 slide: false
 ignorePublish: false
