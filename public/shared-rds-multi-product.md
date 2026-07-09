@@ -2,13 +2,13 @@
 title: 個人開発の2プロダクトを、RDS 1台に同居させて月$40台で運用している
 tags:
   - AWS
-  - RDS
   - PostgreSQL
+  - RDS
   - lambda
   - 個人開発
 private: false
-updated_at: ''
-id: null
+updated_at: '2026-07-09T21:32:30+09:00'
+id: e451924856bb08ad4f44
 organization_url_name: null
 slide: false
 ignorePublish: false
